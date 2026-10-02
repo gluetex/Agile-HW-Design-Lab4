@@ -1,0 +1,12 @@
+target/
+project/target/
+project/project/
+.bsp/
+.metals/
+.bloop/
+.vscode/
+*.sv
+*.vcd
+test_run_dir/
+generated/
+__pycache__/

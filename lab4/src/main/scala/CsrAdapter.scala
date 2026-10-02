@@ -3,35 +3,28 @@ import help._
 
 import chisel3._
 import chisel3.util._
-
-class ApbPort extends Bundle {
-  val psel = Input(Bool())
-  val penable = Input(Bool())
-  val pwrite = Input(Bool())
-  val paddr = Input(UInt(32.W))
-  val pwdata = Input(UInt(32.W))
-  val prdata = Output(UInt(32.W))
-  val pready = Output(Bool())
-  val pslverr = Output(Bool())
-}
+import chisel3.reflect.DataMirror
 
 class CsrAdapter(descriptionSheetPath: String) extends Module {
 
-  val sheets = Sheet.load(descriptionSheetPath)
-  val map = sheets("Map")
-  println(map)
+  // Part 1: parsed and validated CSR specification
+  val spec = SocSpec.load(descriptionSheetPath)
+  println(spec)
 
+  // Part 2: APB interface and handshake
   val apb = IO(new ApbPort)
-  
-  val csr = IO(new DynamicBundle(
-    Seq(sheets(map.column("Block").head).column("Register").head -> Output(UInt(32.W)))
-  ))
+  val bus = new ApbTarget(apb)
 
+  // IP-side ports, one entry per field as listed in the README (e.g. uart0_ctrl_en,
+  // uart0_data_txData + uart0_data_txData_trg)
+  val csr = IO(new DynamicBundle(spec.ports))
 
-  apb := DontCare
-  apb.pready := 1.B
-  apb.pslverr := 1.B
-  csr := DontCare
+  // TODO part 3: address decoding -> which register is accessed, error on invalid address
+  // TODO part 4: field logic (rw/ro/const, wotrg/rotrg) -> drive csr outputs and read data
+  csr.elements.values.foreach { port => // placeholder: leave outputs undriven for now
+    if (DataMirror.specifiedDirectionOf(port) == SpecifiedDirection.Output) port := DontCare
+  }
+  bus.respond(rdata = 0.U, error = true.B)
 
 }
 

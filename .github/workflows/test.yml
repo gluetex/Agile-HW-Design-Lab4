@@ -1,0 +1,40 @@
+# Runs all lab4 tests on every push and pull request.
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: lab4
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: sbt
+
+      - uses: sbt/setup-sbt@v1
+
+      # Verilator is needed for the Python reference adapter test (README: use < 5.050)
+      - name: Install Verilator
+        run: sudo apt-get update && sudo apt-get install -y verilator && verilator --version
+
+      # Generate the Python reference adapter (soc_adapter.sv) used by GeneratorTest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generate Python reference adapter
+        run: |
+          pip install -r requirements.txt
+          python csr_adapter_gen.py soc.xlsx
+
+      - name: Run tests
+        run: sbt test
