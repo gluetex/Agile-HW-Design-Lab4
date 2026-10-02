@@ -19,16 +19,50 @@ class CsrAdapter(descriptionSheetPath: String) extends Module {
   // csr.uart0.data.txData.data / .trg (wotrg). Look one up with CsrPort.lookup(csr, field.path)
   val csr = IO(spec.csrBundle())
 
-  // TODO part 3: address decoding -> which register is accessed, error on invalid address
-  // TODO part 4: field logic (rw/ro/const, wotrg/rotrg) -> drive csr outputs and read data
-  def leaves(d: Data): Seq[Data] = d match {
-    case r: Record => r.elements.values.toSeq.flatMap(leaves)
-    case leaf => Seq(leaf)
+  // ---- Part 3: address decoding ----
+  def addrIs(a: BigInt): Bool = bus.addr === a.U(32.W)
+  def addrIsOneOf(addrs: Seq[BigInt]): Bool = addrs.map(addrIs).foldLeft(false.B)(_ || _)
+
+  val readable = addrIsOneOf(spec.readableAddresses)
+  val writable = addrIsOneOf(spec.writableAddresses)
+  val error = Mux(apb.pwrite, !writable, !readable)
+
+  // ---- Part 4: field logic ----
+  /** Register holding a software-writable field. Reset to Init (0 if the sheet has `?`). */
+  def storageReg(f: CsrField): UInt = {
+    val fld = f.field
+    val reg = RegInit(fld.init.getOrElse(BigInt(0)).U(fld.width.W))
+    when(bus.write && addrIs(f.address)) {
+      reg := bus.wdata(fld.hi, fld.lo)
+    }
+    reg
   }
-  leaves(csr).foreach { port => // placeholder: leave outputs undriven for now
-    if (DataMirror.specifiedDirectionOf(port) == SpecifiedDirection.Output) port := DontCare
+
+  // for every readable field: its value, moved to its bit position, and only if its register is addressed
+  val readTerms = spec.fields.flatMap { f =>
+    val fld = f.field
+    val sel = addrIs(f.address)
+    val value: Option[UInt] = fld.typ match {
+      case FieldType.Const => Some(fld.init.get.U(fld.width.W))
+      case FieldType.RW =>
+        val reg = storageReg(f)
+        CsrPort.lookup(csr, f.path) := reg
+        Some(reg)
+      case FieldType.RO =>
+        Some(CsrPort.lookup(csr, f.path).asInstanceOf[UInt])
+      case FieldType.WoTrg =>
+        CsrPort.lookup(csr, f.path :+ "data") := storageReg(f)
+        CsrPort.lookup(csr, f.path :+ "trg") := bus.write && sel
+        None // write-only: nothing to read back
+      case FieldType.RoTrg =>
+        CsrPort.lookup(csr, f.path :+ "trg") := bus.read && sel
+        Some(CsrPort.lookup(csr, f.path :+ "data").asInstanceOf[UInt])
+    }
+    value.map(v => Mux(sel, v << fld.lo, 0.U(32.W)))
   }
-  bus.respond(rdata = 0.U, error = true.B)
+  val rdata = readTerms.foldLeft(0.U(32.W))(_ | _)
+
+  bus.respond(rdata = rdata, error = error)
 
 }
 
