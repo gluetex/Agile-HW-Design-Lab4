@@ -49,15 +49,22 @@ class SocSpecTest extends AnyFlatSpec with Matchers {
     spec.writableAddresses should contain(BigInt("41003008", 16)) // uart0.data (wotrg)
   }
 
-  it should "name the IP-side ports like the Python generator" in {
-    spec.ports.map(_._1) shouldBe Seq(
-      "uart0_ctrl_en", "uart0_ctrl_loopback",
-      "uart0_status_txEmpty", "uart0_status_rxReady",
-      "uart0_data_txData", "uart0_data_txData_trg",
-      "uart0_data_rxData", "uart0_data_rxData_trg",
-      "gpio0_ctrl_en", "gpio0_dir", "gpio0_dataIn", "gpio0_dataOut",
-      "gpio1_ctrl_en", "gpio1_dir", "gpio1_dataIn", "gpio1_dataOut"
+  it should "name the IP-side ports as in the README (block.reg(.field)(.data/.trg))" in {
+    spec.ports.map(_.name) shouldBe Seq(
+      "uart0.ctrl.en", "uart0.ctrl.loopback",
+      "uart0.status.txEmpty", "uart0.status.rxReady",
+      "uart0.data.txData.data", "uart0.data.txData.trg",
+      "uart0.data.rxData.data", "uart0.data.rxData.trg",
+      "gpio0.ctrl.en", "gpio0.dir", "gpio0.dataIn", "gpio0.dataOut",
+      "gpio1.ctrl.en", "gpio1.dir", "gpio1.dataIn", "gpio1.dataOut"
     )
+  }
+
+  it should "nest the ports into a csr bundle (block -> register -> field)" in {
+    val csr = spec.csrBundle()
+    csr.elements.keys.toSeq shouldBe Seq("uart0", "gpio0", "gpio1") // sysInfo has only a const
+    CsrPort.lookup(csr, Seq("uart0", "data", "txData", "trg")).getWidth shouldBe 1
+    CsrPort.lookup(csr, Seq("gpio1", "dir")).getWidth shouldBe 32
   }
 
   behavior of "SocSpec parsing helpers"

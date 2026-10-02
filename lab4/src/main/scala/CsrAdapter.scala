@@ -15,13 +15,17 @@ class CsrAdapter(descriptionSheetPath: String) extends Module {
   val apb = IO(new ApbPort)
   val bus = new ApbTarget(apb)
 
-  // IP-side ports, one entry per field as listed in the README (e.g. uart0_ctrl_en,
-  // uart0_data_txData + uart0_data_txData_trg)
-  val csr = IO(new DynamicBundle(spec.ports))
+  // IP-side ports, nested as in the README: csr.uart0.ctrl.en (rw),
+  // csr.uart0.data.txData.data / .trg (wotrg). Look one up with CsrPort.lookup(csr, field.path)
+  val csr = IO(spec.csrBundle())
 
   // TODO part 3: address decoding -> which register is accessed, error on invalid address
   // TODO part 4: field logic (rw/ro/const, wotrg/rotrg) -> drive csr outputs and read data
-  csr.elements.values.foreach { port => // placeholder: leave outputs undriven for now
+  def leaves(d: Data): Seq[Data] = d match {
+    case r: Record => r.elements.values.toSeq.flatMap(leaves)
+    case leaf => Seq(leaf)
+  }
+  leaves(csr).foreach { port => // placeholder: leave outputs undriven for now
     if (DataMirror.specifiedDirectionOf(port) == SpecifiedDirection.Output) port := DontCare
   }
   bus.respond(rdata = 0.U, error = true.B)

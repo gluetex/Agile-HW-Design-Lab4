@@ -108,25 +108,66 @@ case class BlockInstance(
 case class CsrField(block: BlockInstance, register: Register, field: Field) {
   def address: BigInt = block.address(register)
 
-  /** Flat port name, matching the Python generator: `block_reg` or `block_reg_field`. */
-  def ioName: String =
-    (Seq(block.name, register.name) ++ field.name).mkString("_")
+  /** Position in the `csr` bundle: `block.reg` or `block.reg.field`. */
+  def path: Seq[String] = Seq(block.name, register.name) ++ field.name
 
-  /** The ports this field needs towards the IP block, as (name, Chisel type).
-    *
-    * Follows the README: `rw` -> Output data, `ro` -> Input data,
-    * `wotrg` -> Output data + Output trg, `rotrg` -> Input data + Output trg,
-    * `const` -> nothing. Usable directly with [[help.DynamicBundle]].
+  /** Flat name the Python generator uses: `block_reg` or `block_reg_field`. */
+  def ioName: String = path.mkString("_")
+
+  /** The ports this field needs towards the IP block, as in the README:
+    *  - `rw`    -> `block.reg(.field)`: Output
+    *  - `ro`    -> `block.reg(.field)`: Input
+    *  - `wotrg` -> `block.reg(.field).data`: Output, `.trg`: Output
+    *  - `rotrg` -> `block.reg(.field).data`: Input,  `.trg`: Output
+    *  - `const` -> nothing
     */
-  def ports: Seq[(String, Data)] = {
+  def ports: Seq[CsrPort] = {
     val data = if (field.width == 1) Bool() else UInt(field.width.W)
+    def trgPorts(dataDir: Data) = Seq(
+      CsrPort(path :+ "data", ioName, dataDir),
+      CsrPort(path :+ "trg", s"${ioName}_trg", Output(Bool()))
+    )
     field.typ match {
-      case FieldType.RW    => Seq(ioName -> Output(data))
-      case FieldType.RO    => Seq(ioName -> Input(data))
-      case FieldType.WoTrg => Seq(ioName -> Output(data), s"${ioName}_trg" -> Output(Bool()))
-      case FieldType.RoTrg => Seq(ioName -> Input(data), s"${ioName}_trg" -> Output(Bool()))
+      case FieldType.RW    => Seq(CsrPort(path, ioName, Output(data)))
+      case FieldType.RO    => Seq(CsrPort(path, ioName, Input(data)))
+      case FieldType.WoTrg => trgPorts(Output(data))
+      case FieldType.RoTrg => trgPorts(Input(data))
       case FieldType.Const => Seq()
     }
+  }
+}
+
+/** One IP-side port of the adapter.
+  *
+  * @param path       position in the nested `csr` bundle, e.g. Seq("uart0", "data", "txData", "trg")
+  * @param pythonName the flat name of the same port in the Python reference adapter
+  * @param data       Chisel type including direction
+  */
+case class CsrPort(path: Seq[String], pythonName: String, data: Data) {
+  def name: String = path.mkString(".")
+}
+
+object CsrPort {
+
+  /** Look up a port (or a sub-bundle) in the `csr` IO by path, e.g.
+    * `CsrPort.lookup(csr, f.path)` gives the UInt of an `rw` field,
+    * or the `data`/`trg` bundle of a trigger field.
+    */
+  def lookup(root: Data, path: Seq[String]): Data =
+    path.foldLeft(root) {
+      case (b: DynamicBundle, key) => b(key)
+      case (other, key) => throw new NoSuchElementException(s"No '$key' below $other")
+    }
+
+  /** Nest flat (path, Data) entries into DynamicBundles: block -> register -> field -> data/trg. */
+  def nest(entries: Seq[(Seq[String], Data)]): DynamicBundle = {
+    val heads = entries.map(_._1.head).distinct
+    new DynamicBundle(heads.map { h =>
+      entries.filter(_._1.head == h) match {
+        case Seq((Seq(_), leaf)) => h -> leaf
+        case sub => h -> nest(sub.map { case (p, d) => (p.tail, d) })
+      }
+    })
   }
 }
 
@@ -148,8 +189,14 @@ case class SocSpec(blocks: Seq[BlockInstance]) {
       r <- b.registers
     } yield (b, r, b.address(r))
 
-  /** All IP-side ports of the adapter, in a stable order. */
-  def ports: Seq[(String, Data)] = fields.flatMap(_.ports)
+  /** All IP-side ports of the adapter, in spreadsheet order. */
+  def ports: Seq[CsrPort] = fields.flatMap(_.ports)
+
+  /** The nested `csr` IO bundle: `csr.uart0.ctrl.en`, `csr.uart0.data.txData.trg`, ...
+    * Blocks and registers without ports (only `const` fields) are left out.
+    * Creates a fresh Chisel type on every call.
+    */
+  def csrBundle(): DynamicBundle = CsrPort.nest(ports.map(p => p.path -> p.data))
 
   def readableAddresses: Seq[BigInt] =
     registers.collect { case (_, r, a) if r.swReadable => a }.distinct.sorted

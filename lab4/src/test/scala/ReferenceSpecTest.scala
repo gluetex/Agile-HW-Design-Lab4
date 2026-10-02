@@ -23,13 +23,13 @@ class ReferenceSpecTest extends AnyFlatSpec with Matchers {
   behavior of "SocSpec compared to the Python reference adapter"
 
   it should "have the same IP-side ports (name, direction, width, order)" in {
-    val ours = spec.ports.map { case (name, data) =>
-      val dir = DataMirror.specifiedDirectionOf(data) match {
+    val ours = spec.ports.map { p =>
+      val dir = DataMirror.specifiedDirectionOf(p.data) match {
         case SpecifiedDirection.Output => "output"
         case SpecifiedDirection.Input  => "input"
         case other => s"unexpected($other)"
       }
-      PythonReference.Port(name, dir, data.getWidth)
+      PythonReference.Port(p.pythonName, dir, p.data.getWidth)
     }
     ours shouldBe reference.ports
   }
